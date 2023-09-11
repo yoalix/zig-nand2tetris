@@ -1,25 +1,6 @@
 const std = @import("std");
 
-pub const Command = enum {
-    ADD,
-    SUB,
-    NEG,
-    EQ,
-    GT,
-    LT,
-    AND,
-    OR,
-    NOT,
-    PUSH,
-    POP,
-    LABEL,
-    GOTO,
-    IF,
-    FUNCTION,
-    RETURN,
-    CALL,
-    ARITHMETIC,
-};
+pub const Command = enum { ADD, SUB, NEG, EQ, GT, LT, AND, OR, NOT, PUSH, POP, LABEL, GOTO, IF, FUNCTION, RETURN, CALL, ARITHMETIC, NOOP };
 
 pub const Memory = enum {
     LOCAL,
@@ -32,21 +13,14 @@ pub const Memory = enum {
     TEMP,
 };
 
-pub const Arithmetic = enum {
-    ADD,
-    SUB,
-    NEG,
-    EQ,
-    GT,
-    LT,
-    AND,
-    OR,
-    NOT,
+const Arg1 = union(enum) {
+    memory: Memory,
+    label: []const u8,
 };
 
 pub const Operation = struct {
     command: Command,
-    arg1: ?Memory,
+    arg1: ?Arg1,
     arg2: ?u32,
 };
 
@@ -86,109 +60,109 @@ pub fn instructionToCommand(instruction: []const u8) Command {
     } else if (std.mem.eql(u8, instruction, "call")) {
         return Command.CALL;
     } else {
-        return Command.ARITHMETIC;
+        return Command.NOOP;
     }
 }
 
-fn instructionToMemory(instruction: []const u8) Memory {
+fn instructionToLabelMemory(instruction: []const u8) Arg1 {
+    std.debug.print("instructionToLabelMemory: {s}\n", .{instruction});
     if (std.mem.eql(u8, instruction, "local")) {
-        return Memory.LOCAL;
+        return Arg1{ .memory = Memory.LOCAL };
     } else if (std.mem.eql(u8, instruction, "argument")) {
-        return Memory.ARGUMENT;
+        return Arg1{ .memory = Memory.ARGUMENT };
     } else if (std.mem.eql(u8, instruction, "this")) {
-        return Memory.THIS;
+        return Arg1{ .memory = Memory.THIS };
     } else if (std.mem.eql(u8, instruction, "that")) {
-        return Memory.THAT;
+        return Arg1{ .memory = Memory.THAT };
     } else if (std.mem.eql(u8, instruction, "constant")) {
-        return Memory.CONSTANT;
+        return Arg1{ .memory = Memory.CONSTANT };
     } else if (std.mem.eql(u8, instruction, "static")) {
-        return Memory.STATIC;
+        return Arg1{ .memory = Memory.STATIC };
     } else if (std.mem.eql(u8, instruction, "pointer")) {
-        return Memory.POINTER;
+        return Arg1{ .memory = Memory.POINTER };
     } else if (std.mem.eql(u8, instruction, "temp")) {
-        return Memory.TEMP;
+        return Arg1{ .memory = Memory.TEMP };
     } else {
-        return Memory.LOCAL;
+        return Arg1{ .label = instruction };
     }
 }
 
-fn instructionToInt32(instruction: []const u8) !u32 {
-    return std.fmt.parseInt(u32, instruction, 10) catch |e| {
-        std.debug.print("error parsing arg2 {}\n", .{e});
-        return e;
-    };
+fn instructionToInt32(instruction: []const u8) ?u32 {
+    return std.fmt.parseInt(u32, removeCommentsWhitespace(instruction), 10) catch null;
+}
+
+fn removeCommentsWhitespace(instruction: []const u8) []const u8 {
+    return std.mem.trim(u8, std.mem.trimRight(u8, instruction, "//"), &std.ascii.whitespace);
 }
 
 pub const Parser = struct {
     const Self = @This();
     alloc: std.mem.Allocator,
-    operations: []Operation,
+    operations: std.ArrayList(Operation),
     current: u8 = 0,
+    file: []const u8,
 
     //parse file
     pub fn parse(fileName: []const u8, alloc: std.mem.Allocator) !Self {
         const file = try std.fs.cwd().readFileAlloc(alloc, fileName, 1_000_000);
         var instructions = std.mem.split(u8, file, "\n");
         var operations = std.ArrayList(Operation).init(alloc);
-        errdefer operations.deinit();
         while (instructions.next()) |ins| {
             // we dont use short commands, yet
+            std.debug.print("ins: {s}\n", .{ins});
             if (ins.len <= 1) {
                 continue;
             }
             // remove extra whitespace char
-            const instruction = ins[0 .. ins.len - 1];
+            const instruction = removeCommentsWhitespace(ins[0 .. ins.len - 1]);
+            if (instruction.len < 1) {
+                continue;
+            }
             const isComment = instruction[0] == '/' and instruction[1] == '/';
             if (isComment) {
-                std.debug.print("comment found\n", .{});
                 continue;
             }
             var commands = std.mem.split(u8, instruction, " ");
-            std.debug.print("commands: {any}\n", .{commands});
             const command = commands.next().?;
             var opCommand = instructionToCommand(command);
 
-            std.debug.print("command: {any}\n", .{opCommand});
-            var opArg1 = if (commands.peek() != null) instructionToMemory(commands.next().?) else null;
-            std.debug.print("arg1: {any}\n", .{opArg1});
-            var opArg2 = if (commands.peek() != null) try instructionToInt32(commands.next().?) else null;
-            std.debug.print("arg2: {any}\n", .{opArg2});
+            var opArg1 = if (commands.peek() != null) instructionToLabelMemory(commands.next().?) else null;
+            var opArg2 = if (commands.peek() != null) instructionToInt32(commands.next().?) else null;
 
             var operation: Operation = Operation{
                 .command = opCommand,
                 .arg1 = opArg1,
                 .arg2 = opArg2,
             };
-            std.debug.print("operation: {}\n", .{operation});
+            std.debug.print("operation: {any} ", .{operation.command});
+            if (operation.arg1 != null) switch (operation.arg1.?) {
+                .label => std.debug.print("arg1: {s} ", .{operation.arg1.?.label}),
+                // null => std.debug.print("arg1: {any} ", .{operation.arg1}),
+                else => {
+                    std.debug.print("arg1: {any} ", .{operation.arg1.?.memory});
+                },
+            };
+            std.debug.print("arg1: {any} ", .{operation.arg1});
+            std.debug.print("arg2: {any}\n", .{operation.arg2});
             try operations.append(operation);
         }
+
         return Self{
             .alloc = alloc,
-            .operations = operations.items,
+            .operations = operations,
+            .file = file,
         };
-    }
-    pub fn hasMoreCommands(self: *Self) bool {
-        //return true if there are more commands
-        return self.current < self.operations.len;
-    }
-    pub fn advance(self: *Self) void {
-        self.current += 1;
-        //advance to next command
-
-    }
-    pub fn commandType(self: *Self) Command {
-        //return command type
-        return self.operations[self.current].command;
-    }
-    //return commands
-    pub fn arg1(self: *Self) []u8 {
-        return self.operations[self.current].arg1;
-    }
-    pub fn arg2(self: *Self) u32 {
-        return self.operations[self.current].arg2;
     }
 
     pub fn deinit(self: *Self) void {
-        self.alloc.free(self.operations);
+        self.alloc.free(self.file);
+        self.operations.deinit();
     }
 };
+
+test "parser" {
+    var allocator = std.testing.allocator;
+    var parsed = try Parser.parse("/Users/yoali/Desktop/nand2tetris/projects/08/FunctionCalls/SimpleFunction/SimpleFunction.vm", allocator);
+    defer parsed.deinit();
+    std.debug.print("parsed: {any}\n", .{parsed.operations.items});
+}
